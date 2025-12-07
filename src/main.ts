@@ -1,20 +1,14 @@
-import { Plugin, TFile, debounce } from 'obsidian';
+import { Plugin, TFile } from 'obsidian';
 
 export default class VocabLinkerPlugin extends Plugin {
-	// 用來儲存防抖動的函數
-	private debouncedProcess: any;
-
 	async onload() {
 		console.log('Vocab Linker Loaded');
 
-		// 設定防抖動：停止編輯 2000ms (2秒) 後才執行
-		// 這樣可以避免你在打字時文字一直跳動
-		this.debouncedProcess = debounce(this.processActiveFile, 2000, true);
-
-		// 監聽編輯器變化
+		// 監聽檔案打開事件：只在打開檔案時處理一次
 		this.registerEvent(
-			this.app.workspace.on('editor-change', (editor, view) => {
-				this.debouncedProcess(view.file);
+			this.app.workspace.on('file-open', (file) => {
+				console.log('file-open, start making auto links');
+				this.processActiveFile(file);
 			})
 		);
 	}
