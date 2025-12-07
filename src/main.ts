@@ -81,10 +81,13 @@ export default class VocabLinkerPlugin extends Plugin {
 		// 跳脫特殊字元 (Escape Regex)
 		const escapedKeywords = allKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 		
-		// 建立單一的大正則表達式： (?<!\[)\b(word1|word2|...)\b(?!\])
-		// 意思：全字匹配，且不在連結內
+		// 建立單一的大正則表達式： (?<!\[)(?<!\w)(word1|word2|...)\w*(?!\])
+		// 意思：關鍵字必須是單詞的開頭（或完整單詞），且不在連結內
+		// - (?<!\w) 確保前面不是單詞字符（即關鍵字是單詞的開頭）
+		// - \w* 允許關鍵字後面有更多字母（如 connect -> connectivity, connected）
+		// - reconnect 中的 connect 不會匹配，因為前面有 'r'
 		const masterRegex = allKeywords.length > 0 
-			? new RegExp(`(?<!\\[)\\b(${escapedKeywords.join('|')})\\b(?!\\])`, 'gi')
+			? new RegExp(`(?<!\\[)(?<!\\w)(${escapedKeywords.join('|')})\\w*(?!\\])`, 'gi')
 			: null;
 
 		// 2. 掃描例句 (只需一次遍歷)
@@ -134,20 +137,33 @@ export default class VocabLinkerPlugin extends Plugin {
 			// --- 優化重點 2: 使用 Master Regex 進行一次性替換 ---
 			if (masterRegex) {
 				newLine = newLine.replace(masterRegex, (match) => {
+					// match 可能是整個單詞（如 "connectivity"），需要找到實際匹配的關鍵字
 					const lowerMatch = match.toLowerCase();
-					const vData = vocabMap[lowerMatch];
 					
-					if (vData) {
+					// 從最長到最短查找匹配的關鍵字
+					let matchedKeyword: string | null = null;
+					for (const keyword of allKeywords) {
+						if (lowerMatch.startsWith(keyword)) {
+							matchedKeyword = keyword;
+							break;
+						}
+					}
+					
+					if (matchedKeyword && vocabMap[matchedKeyword]) {
+						const vData = vocabMap[matchedKeyword];
 						lineHasMatch = true;
 						
 						// 記錄: 這個單字用到了這個 sentenceId
-						if (!keywordToSentences[lowerMatch]) {
-							keywordToSentences[lowerMatch] = new Set();
+						if (!keywordToSentences[matchedKeyword]) {
+							keywordToSentences[matchedKeyword] = new Set();
 						}
-						keywordToSentences[lowerMatch].add(sentenceId);
+						keywordToSentences[matchedKeyword].add(sentenceId);
 
-						// 回傳替換後的連結
-						return `[${match}](#${vData.id})`;
+						// 只替換關鍵字部分為連結，保留後綴
+						// 例如: "connectivity" -> "[connect](#id)ivity"
+						const suffix = match.substring(matchedKeyword.length);
+						const keywordCase = match.substring(0, matchedKeyword.length); // 保留原始大小寫
+						return `[${keywordCase}](#${vData.id})${suffix}`;
 					}
 					return match;
 				});
@@ -189,7 +205,54 @@ export default class VocabLinkerPlugin extends Plugin {
 			return line;
 		});
 
+		// 5. 確保有 ID 的行的上下行都是空的（讓 ID 可以被正常搜尋）
+		vocabSection = this.ensureEmptyLinesAroundIds(vocabSection);
+		sentenceSection = this.ensureEmptyLinesAroundIds(sentenceSection);
+
 		return vocabSection.join('\n') + '\n---\n' + sentenceSection.join('\n');
+	}
+
+	// 確保有 ID 的行的上下行都是空的，讓 ID 可以被正常搜尋
+	ensureEmptyLinesAroundIds(lines: string[]): string[] {
+		const result: string[] = [];
+		const idPattern = /\^[a-z0-9]{6}/;
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const hasId = idPattern.test(line);
+			const prevLine = i > 0 ? lines[i - 1] : null;
+			const nextLine = i < lines.length - 1 ? lines[i + 1] : null;
+
+			// 如果這行有 ID，確保上下行都是空的
+			if (hasId) {
+				// 檢查上一行是否為空
+				const prevIsEmpty = prevLine ? prevLine.trim() === '' : true;
+				// 檢查結果中最後一行是否為空
+				const lastResultLine = result.length > 0 ? result[result.length - 1] : null;
+				const lastResultIsEmpty = lastResultLine ? lastResultLine.trim() === '' : true;
+				
+				// 如果上一行不是空的，且結果中最後一行也不是空的，插入空行
+				if (!prevIsEmpty && !lastResultIsEmpty) {
+					result.push('');
+				}
+
+				// 添加當前行
+				result.push(line);
+
+				// 檢查下一行是否為空
+				const nextIsEmpty = nextLine ? nextLine.trim() === '' : true;
+				
+				// 如果下一行不是空的，插入空行
+				if (!nextIsEmpty) {
+					result.push('');
+				}
+			} else {
+				// 如果這行沒有 ID，直接添加
+				result.push(line);
+			}
+		}
+
+		return result;
 	}
 }
 
